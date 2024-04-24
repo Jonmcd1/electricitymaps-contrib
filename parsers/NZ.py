@@ -2,7 +2,7 @@
 
 # The arrow library is used to handle datetimes
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from logging import Logger, getLogger
 
 import arrow
@@ -11,15 +11,27 @@ from bs4 import BeautifulSoup
 # The request library is used to fetch content through HTTP
 from requests import Session
 
-timezone = "Pacific/Auckland"
+time_zone = "Pacific/Auckland"
 
 NZ_PRICE_REGIONS = set(range(1, 14))
+PRODUCTION_URL = "https://www.transpower.co.nz/system-operator/live-system-and-market-data/consolidated-live-data"
+PRICE_URL = "https://api.em6.co.nz/ords/em6/data_api/region/price/"
 
+### DEBUGGING CONTROLS ###
+print_arrow_comparison = True
+save_outputs = False
+### END DEBUGGING CONTROLS
 
 def fetch(session: Session | None = None):
     r = session or Session()
-    url = "https://www.transpower.co.nz/system-operator/live-system-and-market-data/consolidated-live-data"
+    url = PRODUCTION_URL
     response = r.get(url)
+
+    if save_outputs:
+        f = open("test/mocks/NZ/response.html", "w")
+        f.write(response.text)
+        f.close()
+
     soup = BeautifulSoup(response.text, "html.parser")
     for item in soup.find_all("script"):
         if item.attrs.get("data-drupal-selector"):
@@ -46,8 +58,13 @@ def fetch_price(
         )
 
     r = session or Session()
-    url = "https://api.em6.co.nz/ords/em6/data_api/region/price/"
+    url = PRICE_URL
     response = r.get(url, verify=False)
+
+    if save_outputs:
+        with open('test/mocks/NZ/response.json', 'w') as f:
+            json.dump(response.json(), f)
+
     obj = response.json()
     region_prices = []
 
@@ -60,10 +77,21 @@ def fetch_price(
             region_prices.append(price)
 
     avg_price = sum(region_prices) / len(region_prices)
-    datetime = arrow.get(time, tzinfo="UTC")
+    #date_time = arrow.get(time, tzinfo="UTC") # Old code
+    date_time = datetime.strptime(time, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc) # New code
+
+    if print_arrow_comparison:
+        print("\n\n\n################ ARROW BEGIN ################")
+        print("Time:", time)
+        print("arrow.get(time, tzinfo='UTC'):", arrow.get(time, tzinfo="UTC"))
+        print("arrow.get(time, tzinfo='UTC').datetime:", arrow.get(time, tzinfo="UTC").datetime, end="\n\n\n")
+        print("arrow output:", arrow.get(time, tzinfo="UTC").datetime)
+        print("datetime output:", datetime.strptime(time, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc))
+        print("################ ARROW END ################\n\n\n")
+    
 
     return {
-        "datetime": datetime.datetime,
+        "datetime": date_time,
         "price": avg_price,
         "currency": "NZD",
         "source": "api.em6.co.nz",
@@ -85,14 +113,24 @@ def fetch_production(
 
     obj = fetch(session)
 
-    datetime = arrow.get(str(obj["soPgenGraph"]["timestamp"]), "X").datetime
+    #date_time = arrow.get(str(obj["soPgenGraph"]["timestamp"]), "X").datetime # Old code
+    date_time = datetime.fromtimestamp(obj["soPgenGraph"]["timestamp"], tz=timezone.utc) # New code
+
+    if print_arrow_comparison:
+        print("\n\n\n################ ARROW BEGIN ################")
+        print("Time object:", obj["soPgenGraph"]["timestamp"])
+        print("Time:", str(obj["soPgenGraph"]["timestamp"]))
+        print("arrow.get(str(obj['soPgenGraph']['timestamp']), 'X').datetime:", arrow.get(str(obj["soPgenGraph"]["timestamp"]), "X").datetime, end="\n\n\n")
+        print("arrow output:", arrow.get(str(obj["soPgenGraph"]["timestamp"]), "X").datetime)
+        print("datetime output:", datetime.fromtimestamp(obj["soPgenGraph"]["timestamp"], tz=timezone.utc))
+        print("################ ARROW END ################\n\n\n")
 
     region_key = "New Zealand"
     productions = obj["soPgenGraph"]["data"][region_key]
 
     data = {
         "zoneKey": zone_key,
-        "datetime": datetime,
+        "datetime": date_time,
         "production": {
             "coal": productions.get("Coal", {"generation": None})["generation"],
             "oil": productions.get("Diesel/Oil", {"generation": None})["generation"],
